@@ -1,0 +1,6 @@
+google-genai
+pypdf
+python-docx
+pandas==2.2.3
+reportlab
+pytest
