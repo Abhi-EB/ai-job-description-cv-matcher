@@ -31,3 +31,4 @@ venv/
 # Operating system files
 .DS_Store
 Thumbs.db
+backup_before_multiformat_upgrade/

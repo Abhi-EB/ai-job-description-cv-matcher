@@ -111,3 +111,158 @@ def analyse_cv_with_gemini(client, model_name, prompt):
     raise RuntimeError(
         "Gemini analysis failed after all retry attempts."
     )
+
+
+
+def extract_jd_text_from_pdf(pdf_bytes):
+    """Extract job description text from uploaded PDF bytes."""
+    from io import BytesIO
+    from pypdf import PdfReader
+
+    if not pdf_bytes:
+        raise ValueError("The uploaded PDF is empty.")
+
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+
+        text = "\n".join(
+            page.extract_text() or ""
+            for page in reader.pages
+        ).strip()
+
+    except Exception as error:
+        raise ValueError(
+            "Unable to read the PDF. Please upload a valid PDF file."
+        ) from error
+
+    if not text:
+        raise ValueError(
+            "No readable text found in the job description PDF."
+        )
+
+    return text
+
+def extract_jd_text_from_image(
+    client,
+    image_bytes,
+    mime_type,
+    model_name="gemini-3.6-flash"
+):
+    """Extract job description text from a screenshot using Gemini."""
+    from google.genai import types
+
+    supported_types = ["image/jpeg", "image/png"]
+
+    if mime_type not in supported_types:
+        raise ValueError("Please upload a JPEG or PNG image.")
+
+    image_part = types.Part.from_bytes(
+        data=image_bytes,
+        mime_type=mime_type
+    )
+
+    prompt = """
+    Extract all readable job description content from this image.
+    Preserve headings, responsibilities, required skills,
+    qualifications, experience, and location.
+    Do not invent missing text.
+    Return only the extracted text.
+    """
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[prompt, image_part]
+    )
+
+    if not response.text or not response.text.strip():
+        raise ValueError("Gemini could not extract readable text.")
+
+    return response.text.strip()
+
+
+def validate_linkedin_job_url(url):
+    """Check whether the supplied URL is a genuine LinkedIn job URL."""
+    from urllib.parse import urlparse
+
+    if not isinstance(url, str) or not url.strip():
+        return False
+
+    parsed = urlparse(url.strip())
+    hostname = (parsed.hostname or "").lower()
+
+    return (
+        parsed.scheme in ["http", "https"]
+        and (hostname == "linkedin.com"
+             or hostname.endswith(".linkedin.com"))
+        and "/jobs/view/" in parsed.path.lower()
+    )
+
+
+
+def extract_jd_from_public_url(url):
+    """
+    Extract text from a publicly accessible LinkedIn job page.
+    Does not bypass login or access restrictions.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    if not validate_linkedin_job_url(url):
+        raise ValueError("Please provide a valid LinkedIn job URL.")
+
+    response = requests.get(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
+            )
+        },
+        timeout=15
+    )
+
+    response.raise_for_status()
+
+    final_url = getattr(response, "url", url)
+
+    if not validate_linkedin_job_url(final_url):
+        raise ValueError(
+            "LinkedIn redirected the request to another page. "
+            "Please copy and paste the job description manually."
+        )
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    for element in soup(
+        ["script", "style", "nav", "footer", "header"]
+    ):
+        element.decompose()
+
+    page_text = soup.get_text(
+        separator="\n",
+        strip=True
+    )
+
+    lower_text = page_text.lower()
+
+    blocked_markers = [
+        "sign in to view more jobs",
+        "join linkedin",
+        "linkedin sign in",
+        "authwall",
+        "please sign in to continue"
+    ]
+
+    if any(marker in lower_text for marker in blocked_markers):
+        raise ValueError(
+            "LinkedIn requires login or has restricted access. "
+            "Please copy and paste the job description manually."
+        )
+
+    if len(page_text) < 100:
+        raise ValueError(
+            "The job page did not provide enough readable text. "
+            "Please copy and paste the job description manually."
+        )
+
+    return page_text
